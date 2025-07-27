@@ -17,9 +17,6 @@ from plotly.subplots import make_subplots
 import numpy as np
 import hashlib
 from pathlib import Path
-import zipfile
-from io import BytesIO
-import base64
 
 # ---- Configuration ----
 st.set_page_config(page_title="PDF Name & Muslim Name Analyzer", layout="wide")
@@ -29,199 +26,194 @@ def get_file_hash(file_content):
     """Generate MD5 hash of file content to detect duplicates"""
     return hashlib.md5(file_content).hexdigest()
 
-def create_session_folder():
-    """Create a session-based folder structure in memory/temp"""
-    # Use session state to maintain folder structure
-    if 'session_folder' not in st.session_state:
-        # Create a unique session identifier
-        import uuid
-        session_id = str(uuid.uuid4())[:8]
-        st.session_state.session_id = session_id
-        st.session_state.session_folder = f"tmmkk_session_{session_id}"
-        st.session_state.processed_files = {}
-        st.session_state.all_extracted_data = []
-        st.session_state.all_muslim_names = []
+def create_or_select_folder():
+    """Create folder selection interface"""
+    st.subheader("📁 Select or Create Working Directory")
     
-    return st.session_state.session_folder
-
-def save_to_session_storage(extracted_data, muslim_names, file_hash, filename):
-    """Save analysis data to session state instead of files"""
+    # Try Downloads directory first, fallback to current working directory
     try:
-        # Add to session storage
-        file_record = {
-            'file_hash': file_hash,
-            'filename': filename,
+        downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
+        if os.path.exists(downloads_path):
+            base_path = os.path.join(downloads_path, "tmmkk")
+        else:
+            # Fallback to current working directory where Python file exists
+            base_path = os.path.join(os.getcwd(), "tmmkk")
+    except Exception:
+        # Ultimate fallback to current working directory
+        base_path = os.path.join(os.getcwd(), "tmmkk")
+    
+    # Create tmmkk directory if it doesn't exist
+    try:
+        os.makedirs(base_path, exist_ok=True)
+        st.info(f"📂 Working with base directory: {base_path}")
+    except Exception as e:
+        st.error(f"❌ Error creating base directory: {e}")
+        return None
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        folder_option = st.radio(
+            "Choose option:",
+            ["Select existing folder", "Create new folder"],
+            key="folder_option"
+        )
+    
+    if folder_option == "Create new folder":
+        with col2:
+            new_folder_name = st.text_input(
+                "Folder name:", 
+                value="new_analysis",
+                help="Enter name for new working directory inside tmmkk folder"
+            )
+        
+        if new_folder_name:
+            folder_path = os.path.join(base_path, new_folder_name)
+            
+            try:
+                os.makedirs(folder_path, exist_ok=True)
+                st.success(f"✅ Created and using folder: {folder_path}")
+                return folder_path
+            except Exception as e:
+                st.error(f"❌ Error creating folder: {e}")
+                return None
+    
+    else:
+        # Get list of existing folders in tmmkk directory
+        try:
+            existing_folders = []
+            for item in os.listdir(base_path):
+                item_path = os.path.join(base_path, item)
+                if os.path.isdir(item_path):
+                    existing_folders.append(item)
+            
+            if existing_folders:
+                with col2:
+                    selected_folder = st.selectbox(
+                        "Select folder:",
+                        options=existing_folders,
+                        help="Choose from existing folders in tmmkk directory"
+                    )
+                
+                if selected_folder:
+                    folder_path = os.path.join(base_path, selected_folder)
+                    st.success(f"✅ Using existing folder: {folder_path}")
+                    return folder_path
+            else:
+                st.warning("⚠️ No existing folders found in tmmkk directory. Please create a new folder.")
+                return None
+        
+        except Exception as e:
+            st.error(f"❌ Error reading tmmkk directory: {e}")
+            return None
+    
+    return None
+
+def get_next_file_number(folder_path, file_type):
+    """Get the next sequential number for a file type"""
+    if not os.path.exists(folder_path):
+        return 1
+    
+    files = os.listdir(folder_path)
+    numbers = []
+    
+    for file in files:
+        if file.startswith(f"{file_type}_") and file.endswith(".csv"):
+            try:
+                number = int(file.split("_")[2].split(".")[0])
+                numbers.append(number)
+            except (IndexError, ValueError):
+                continue
+    
+    return max(numbers) + 1 if numbers else 1
+
+def save_analysis_files(folder_path, extracted_data, muslim_names, file_hash):
+    """Save analysis files with sequential numbering"""
+    try:
+        # Get next file numbers
+        extracted_num = get_next_file_number(folder_path, "extracted_name")
+        muslim_num = get_next_file_number(folder_path, "muslim_name")
+        
+        # Create file paths
+        extracted_file = os.path.join(folder_path, f"extracted_name_{extracted_num}.csv")
+        muslim_file = os.path.join(folder_path, f"muslim_name_{muslim_num}.csv")
+        consolidated_extracted = os.path.join(folder_path, "consolidated_extracted_names.csv")
+        consolidated_muslim = os.path.join(folder_path, "consolidated_muslim_names.csv")
+        processed_files = os.path.join(folder_path, "processed_files.json")
+        
+        # Save individual extracted names
+        extracted_df = pd.DataFrame(extracted_data)
+        extracted_df['file_hash'] = file_hash
+        extracted_df['file_number'] = extracted_num
+        extracted_df.to_csv(extracted_file, index=False)
+        
+        # Save individual Muslim names
+        muslim_df = pd.DataFrame({'Name': muslim_names})
+        muslim_df['file_hash'] = file_hash
+        muslim_df['file_number'] = muslim_num
+        muslim_df.to_csv(muslim_file, index=False)
+        
+        # Update consolidated files
+        # Consolidated extracted names
+        if os.path.exists(consolidated_extracted):
+            existing_extracted = pd.read_csv(consolidated_extracted)
+            consolidated_extracted_df = pd.concat([existing_extracted, extracted_df], ignore_index=True)
+        else:
+            consolidated_extracted_df = extracted_df
+        
+        consolidated_extracted_df.to_csv(consolidated_extracted, index=False)
+        
+        # Consolidated Muslim names
+        if os.path.exists(consolidated_muslim):
+            existing_muslim = pd.read_csv(consolidated_muslim)
+            consolidated_muslim_df = pd.concat([existing_muslim, muslim_df], ignore_index=True)
+        else:
+            consolidated_muslim_df = muslim_df
+        
+        consolidated_muslim_df.to_csv(consolidated_muslim, index=False)
+        
+        # Update processed files record
+        processed_record = {}
+        if os.path.exists(processed_files):
+            with open(processed_files, 'r') as f:
+                processed_record = json.load(f)
+        
+        processed_record[file_hash] = {
+            'extracted_file': f"extracted_name_{extracted_num}.csv",
+            'muslim_file': f"muslim_name_{muslim_num}.csv",
             'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
-            'extracted_data': extracted_data,
-            'muslim_names': muslim_names,
             'total_names': len(extracted_data),
-            'muslim_count': len(muslim_names)
+            'muslim_names': len(muslim_names)
         }
         
-        # Store in session state
-        st.session_state.processed_files[file_hash] = file_record
+        with open(processed_files, 'w') as f:
+            json.dump(processed_record, f, indent=2)
         
-        # Update consolidated data
-        st.session_state.all_extracted_data.extend(extracted_data)
-        st.session_state.all_muslim_names.extend(muslim_names)
-        
-        return True
+        return {
+            'extracted_file': extracted_file,
+            'muslim_file': muslim_file,
+            'consolidated_extracted': consolidated_extracted,
+            'consolidated_muslim': consolidated_muslim
+        }
     
     except Exception as e:
-        st.error(f"Error saving to session: {e}")
-        return False
-
-def create_downloadable_files():
-    """Create downloadable files from session data"""
-    try:
-        # Create DataFrames
-        all_extracted_df = pd.DataFrame(st.session_state.all_extracted_data)
-        all_muslim_df = pd.DataFrame({'Name': st.session_state.all_muslim_names})
-        
-        # Add file information
-        file_info = []
-        for file_hash, record in st.session_state.processed_files.items():
-            for i in range(record['total_names']):
-                file_info.append({
-                    'filename': record['filename'],
-                    'file_hash': file_hash,
-                    'timestamp': record['timestamp']
-                })
-        
-        file_info_df = pd.DataFrame(file_info)
-        if len(file_info_df) > 0 and len(all_extracted_df) > 0:
-            all_extracted_df = pd.concat([all_extracted_df, file_info_df], axis=1)
-        
-        # Add file information to Muslim names
-        muslim_file_info = []
-        for file_hash, record in st.session_state.processed_files.items():
-            for name in record['muslim_names']:
-                muslim_file_info.append({
-                    'filename': record['filename'],
-                    'file_hash': file_hash,
-                    'timestamp': record['timestamp']
-                })
-        
-        muslim_file_info_df = pd.DataFrame(muslim_file_info)
-        if len(muslim_file_info_df) > 0 and len(all_muslim_df) > 0:
-            all_muslim_df = pd.concat([all_muslim_df, muslim_file_info_df], axis=1)
-        
-        return all_extracted_df, all_muslim_df
-    
-    except Exception as e:
-        st.error(f"Error creating downloadable files: {e}")
-        return pd.DataFrame(), pd.DataFrame()
-
-def create_zip_download():
-    """Create a ZIP file containing all analysis results"""
-    try:
-        # Create a BytesIO buffer for the ZIP file
-        zip_buffer = BytesIO()
-        
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Add individual file results
-            for file_hash, record in st.session_state.processed_files.items():
-                # Individual extracted names file
-                extracted_df = pd.DataFrame(record['extracted_data'])
-                extracted_csv = extracted_df.to_csv(index=False)
-                zip_file.writestr(f"extracted_names_{record['filename']}.csv", extracted_csv)
-                
-                # Individual Muslim names file
-                muslim_df = pd.DataFrame({'Name': record['muslim_names']})
-                muslim_csv = muslim_df.to_csv(index=False)
-                zip_file.writestr(f"muslim_names_{record['filename']}.csv", muslim_csv)
-            
-            # Add consolidated files
-            all_extracted_df, all_muslim_df = create_downloadable_files()
-            
-            if not all_extracted_df.empty:
-                consolidated_extracted_csv = all_extracted_df.to_csv(index=False)
-                zip_file.writestr("consolidated_extracted_names.csv", consolidated_extracted_csv)
-            
-            if not all_muslim_df.empty:
-                consolidated_muslim_csv = all_muslim_df.to_csv(index=False)
-                zip_file.writestr("consolidated_muslim_names.csv", consolidated_muslim_csv)
-            
-            # Add summary report
-            summary_data = create_summary_report()
-            summary_csv = summary_data.to_csv(index=False)
-            zip_file.writestr("analysis_summary.csv", summary_csv)
-            
-            # Add processing log
-            processing_log = create_processing_log()
-            zip_file.writestr("processing_log.json", json.dumps(processing_log, indent=2))
-        
-        zip_buffer.seek(0)
-        return zip_buffer.getvalue()
-    
-    except Exception as e:
-        st.error(f"Error creating ZIP file: {e}")
+        st.error(f"❌ Error saving files: {e}")
         return None
 
-def create_summary_report():
-    """Create a summary report of all processed files"""
-    try:
-        summary_data = []
-        total_names = len(st.session_state.all_extracted_data)
-        total_muslim = len(st.session_state.all_muslim_names)
-        
-        # Overall summary
-        summary_data.append({
-            'File': 'OVERALL SUMMARY',
-            'Total Names': total_names,
-            'Muslim Names': total_muslim,
-            'Non-Muslim Names': total_names - total_muslim,
-            'Muslim Percentage': f"{(total_muslim / total_names * 100):.2f}%" if total_names > 0 else "0%",
-            'Processing Date': time.strftime("%Y-%m-%d %H:%M:%S")
-        })
-        
-        # Individual file summaries
-        for file_hash, record in st.session_state.processed_files.items():
-            summary_data.append({
-                'File': record['filename'],
-                'Total Names': record['total_names'],
-                'Muslim Names': record['muslim_count'],
-                'Non-Muslim Names': record['total_names'] - record['muslim_count'],
-                'Muslim Percentage': f"{(record['muslim_count'] / record['total_names'] * 100):.2f}%" if record['total_names'] > 0 else "0%",
-                'Processing Date': record['timestamp']
-            })
-        
-        return pd.DataFrame(summary_data)
+def check_file_processed(folder_path, file_hash):
+    """Check if a file has already been processed"""
+    processed_files = os.path.join(folder_path, "processed_files.json")
     
-    except Exception as e:
-        st.error(f"Error creating summary report: {e}")
-        return pd.DataFrame()
-
-def create_processing_log():
-    """Create a processing log with detailed information"""
-    try:
-        log_data = {
-            'session_id': st.session_state.session_id,
-            'total_files_processed': len(st.session_state.processed_files),
-            'total_names_extracted': len(st.session_state.all_extracted_data),
-            'total_muslim_names_found': len(st.session_state.all_muslim_names),
-            'processing_details': []
-        }
-        
-        for file_hash, record in st.session_state.processed_files.items():
-            log_data['processing_details'].append({
-                'filename': record['filename'],
-                'file_hash': file_hash,
-                'timestamp': record['timestamp'],
-                'names_extracted': record['total_names'],
-                'muslim_names_found': record['muslim_count'],
-                'muslim_percentage': f"{(record['muslim_count'] / record['total_names'] * 100):.2f}%" if record['total_names'] > 0 else "0%"
-            })
-        
-        return log_data
+    if not os.path.exists(processed_files):
+        return False
     
-    except Exception as e:
-        st.error(f"Error creating processing log: {e}")
-        return {}
-
-def check_file_processed(file_hash):
-    """Check if a file has already been processed in the current session"""
-    return file_hash in st.session_state.get('processed_files', {})
+    try:
+        with open(processed_files, 'r') as f:
+            processed_record = json.load(f)
+        
+        return file_hash in processed_record
+    except Exception:
+        return False
 
 # ---- Helper Functions for PDF Processing ----
 def draw_grid_on_page(page, box_rects):
@@ -328,7 +320,7 @@ Analyze each name and identify which ones are Muslim names. Consider variations 
         return []
 
 def analyze_names_statistics(all_names, muslim_names):
-    """Generate statistics about the name analysis"""
+    """Generate statistics about the name analysis (simplified version)"""
     total_names = len(all_names)
     total_muslim_names = len(muslim_names)
     non_muslim_names = total_names - total_muslim_names
@@ -368,7 +360,7 @@ def process_names_for_analysis(names, batch_size=500, pause=1.0):
     
     return total_muslim_names
 
-# ---- Visualization Functions ----
+# ---- Simplified Visualization Functions ----
 def create_comparison_chart(stats):
     """Create simple comparison chart"""
     categories = ['Total Names', 'Muslim Names', 'Non-Muslim Names']
@@ -454,15 +446,6 @@ def main():
     st.title("TMMK Data Analysis")
     st.markdown("---")
     
-    # Initialize session storage
-    session_folder = create_session_folder()
-    
-    # Display session information
-    st.sidebar.header("📊 Session Information")
-    st.sidebar.info(f"Session ID: {st.session_state.session_id}")
-    if 'processed_files' in st.session_state:
-        st.sidebar.metric("Files Processed", len(st.session_state.processed_files))
-    
     # Sidebar for configuration
     st.sidebar.header("⚙️ Configuration")
     
@@ -481,85 +464,92 @@ def main():
     pause_time = st.sidebar.slider("Pause Between Batches (seconds)", min_value=0.5, max_value=3.0, value=1.0, step=0.5)
     
     # Main content area
-    tab1, tab2, tab3, tab4 = st.tabs(["📄 PDF Processing", "🔍 Muslim Name Analysis", "📊 Analysis Results", "📥 Download Center"])
+    tab1, tab2, tab3 = st.tabs(["📁 Folder & PDF Processing", "📊 Muslim Name Analysis", "📈 Analysis Results"])
     
     with tab1:
-        st.header("PDF Processing")
+        st.header("Folder Selection & PDF Processing")
         
-        # Show session status
-        if 'processed_files' in st.session_state and len(st.session_state.processed_files) > 0:
-            st.success(f"✅ Session active with {len(st.session_state.processed_files)} processed file(s)")
+        # Folder selection
+        working_folder = create_or_select_folder()
+        
+        if working_folder:
+            st.session_state.working_folder = working_folder
             
-            # Show processed files
-            st.subheader("📋 Processed Files in Current Session")
-            for file_hash, record in st.session_state.processed_files.items():
-                with st.expander(f"📄 {record['filename']} - {record['timestamp']}"):
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Names", record['total_names'])
-                    with col2:
-                        st.metric("Muslim Names", record['muslim_count'])
-                    with col3:
-                        percentage = (record['muslim_count'] / record['total_names'] * 100) if record['total_names'] > 0 else 0
-                        st.metric("Muslim %", f"{percentage:.1f}%")
-        else:
-            st.info("🚀 Ready to process your first PDF file!")
-        
-        st.markdown("---")
-        
-        # PDF upload
-        st.subheader("📄 Upload PDF")
-        uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
-        
-        if uploaded_file is not None:
-            # Check if file was already processed
-            file_content = uploaded_file.read()
-            file_hash = get_file_hash(file_content)
-            filename = uploaded_file.name
+            # Show processed files count if any exist
+            processed_files_path = os.path.join(working_folder, "processed_files.json")
+            if os.path.exists(processed_files_path):
+                try:
+                    with open(processed_files_path, 'r') as f:
+                        processed_record = json.load(f)
+                    st.info(f"📂 {len(processed_record)} PDF(s) have been processed in this folder")
+                except Exception:
+                    pass
             
-            if check_file_processed(file_hash):
-                st.warning("⚠️ This PDF has already been processed in this session!")
+            st.markdown("---")
+            
+            # PDF upload
+            st.subheader("📄 PDF Upload & Processing")
+            uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+            
+            if uploaded_file is not None:
+                # Check if file was already processed
+                file_content = uploaded_file.read()
+                file_hash = get_file_hash(file_content)
                 
-                # Show existing data
-                record = st.session_state.processed_files[file_hash]
-                st.subheader("Previously Extracted Data")
-                df = pd.DataFrame(record['extracted_data'])
-                st.dataframe(df.head(20))
-            else:
-                # Process new file
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    input_path = os.path.join(tmpdir, "input.pdf")
+                if check_file_processed(working_folder, file_hash):
+                    st.warning("⚠️ This PDF has already been processed! Skipping to avoid duplicate analysis.")
                     
-                    # Save uploaded file
-                    with open(input_path, 'wb') as f:
-                        f.write(file_content)
-                    
-                    with st.spinner("Processing PDF..."):
-                        extracted_data = process_pdf(input_path, top_margin, bottom_margin)
-                    
-                    if extracted_data:
-                        st.success(f"✅ PDF processed successfully! Found {len(extracted_data)} name records.")
+                    # Load existing data for display
+                    try:
+                        consolidated_extracted = os.path.join(working_folder, "consolidated_extracted_names.csv")
+                        if os.path.exists(consolidated_extracted):
+                            df = pd.read_csv(consolidated_extracted)
+                            current_file_data = df[df['file_hash'] == file_hash]
+                            st.subheader("Previously Extracted Data from This File")
+                            st.dataframe(current_file_data[['Name', 'Guardian Name']].head(20))
+                    except Exception as e:
+                        st.error(f"Error loading existing data: {e}")
+                else:
+                    # Process new file
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        input_path = os.path.join(tmpdir, "input.pdf")
                         
-                        # Display extracted data
-                        st.subheader("Extracted Data Preview")
-                        df = pd.DataFrame(extracted_data)
-                        st.dataframe(df.head(20))
+                        # Save uploaded file
+                        with open(input_path, 'wb') as f:
+                            f.write(file_content)
                         
-                        # Store in session state for analysis
-                        st.session_state.current_extracted_data = extracted_data
-                        st.session_state.current_file_hash = file_hash
-                        st.session_state.current_filename = filename
-                        st.session_state.current_df = df
+                        with st.spinner("Processing PDF..."):
+                            extracted_data = process_pdf(input_path, top_margin, bottom_margin)
                         
-                        st.info("✨ Ready for Muslim name analysis! Go to the next tab.")
-                    else:
-                        st.error("❌ No data could be extracted from the PDF. Please check the file and processing parameters.")
+                        if extracted_data:
+                            st.success(f"✅ PDF processed successfully! Found {len(extracted_data)} name records.")
+                            
+                            # Display extracted data
+                            st.subheader("Extracted Data Preview")
+                            df = pd.DataFrame(extracted_data)
+                            st.dataframe(df.head(20))
+                            
+                            # Store in session state for analysis
+                            st.session_state.extracted_data = extracted_data
+                            st.session_state.current_file_hash = file_hash
+                            st.session_state.df = df
+                            
+                            # Save to files
+                            st.info("💾 Data will be saved to files after Muslim name analysis in Tab 2")
+                        else:
+                            st.error("❌ No data could be extracted from the PDF. Please check the file and processing parameters.")
+        else:
+            st.warning("⚠️ Please select or create a working folder to continue.")
     
     with tab2:
         st.header("Muslim Name Analysis")
         
-        if 'current_extracted_data' not in st.session_state:
-            st.warning("⚠️ Please process a PDF first in the PDF Processing tab.")
+        if 'working_folder' not in st.session_state:
+            st.warning("⚠️ Please select a working folder first in Tab 1.")
+            return
+        
+        if 'extracted_data' not in st.session_state:
+            st.warning("⚠️ Please process a PDF first in Tab 1.")
             return
         
         if not api_key:
@@ -577,18 +567,18 @@ def main():
             st.error(f"❌ Error initializing Gemini API: {e}")
             return
         
-        df = st.session_state.current_df
-        extracted_data = st.session_state.current_extracted_data
+        df = st.session_state.df
+        extracted_data = st.session_state.extracted_data
         file_hash = st.session_state.current_file_hash
-        filename = st.session_state.current_filename
+        working_folder = st.session_state.working_folder
         
         col1, col2 = st.columns(2)
         with col1:
             st.metric("Total Names", len(df))
         with col2:
-            st.metric("Current File", filename)
+            st.metric("Total Records", len(df))
         
-        if st.button("🔍 Analyze Muslim Names", type="primary"):
+        if st.button("🔍 Analyze Muslim Names & Save Files", type="primary"):
             names = df['Name'].dropna().astype(str).tolist()
             
             if not names:
@@ -599,15 +589,30 @@ def main():
                 try:
                     muslim_names = process_names_for_analysis(names, batch_size, pause_time)
                     
-                    # Save to session storage
-                    success = save_to_session_storage(extracted_data, muslim_names, file_hash, filename)
+                    # Save all files
+                    saved_files = save_analysis_files(working_folder, extracted_data, muslim_names, file_hash)
                     
-                    if success:
-                        st.success("✅ Analysis completed and saved to session!")
+                    if saved_files:
+                        st.success("✅ Analysis completed and files saved successfully!")
+                        
+                        # Show saved files info
+                        st.subheader("📁 Saved Files")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.info(f"📄 Individual extracted names: {os.path.basename(saved_files['extracted_file'])}")
+                            st.info(f"📄 Individual Muslim names: {os.path.basename(saved_files['muslim_file'])}")
+                        
+                        with col2:
+                            st.info(f"📄 Consolidated extracted names: {os.path.basename(saved_files['consolidated_extracted'])}")
+                            st.info(f"📄 Consolidated Muslim names: {os.path.basename(saved_files['consolidated_muslim'])}")
+                        
+                        # Store results for visualization
+                        stats = analyze_names_statistics(names, muslim_names)
+                        st.session_state.muslim_names = muslim_names
+                        st.session_state.stats = stats
                         
                         # Display basic results
-                        stats = analyze_names_statistics(names, muslim_names)
-                        
                         st.subheader("📊 Analysis Results")
                         col1, col2, col3 = st.columns(3)
                         with col1:
@@ -616,13 +621,6 @@ def main():
                             st.metric("Muslim Percentage", f"{stats['muslim_percentage']:.1f}%")
                         with col3:
                             st.metric("Non-Muslim Names", stats['non_muslim_names'])
-                        
-                        # Clear current file data
-                        for key in ['current_extracted_data', 'current_file_hash', 'current_filename', 'current_df']:
-                            if key in st.session_state:
-                                del st.session_state[key]
-                        
-                        st.info("🎉 Analysis complete! Check the Analysis Results tab for visualizations and the Download Center for files.")
                     
                 except Exception as e:
                     st.error(f"❌ Error during analysis: {e}")
@@ -630,324 +628,159 @@ def main():
     with tab3:
         st.header("Analysis Results & Visualizations")
         
-        if 'processed_files' not in st.session_state or len(st.session_state.processed_files) == 0:
-            st.warning("⚠️ No analysis results available. Please process and analyze a PDF first.")
+        if 'stats' not in st.session_state:
+            st.warning("⚠️ Please complete the Muslim name analysis first in Tab 2.")
             return
         
-        # Calculate consolidated statistics
-        total_names = len(st.session_state.all_extracted_data)
-        total_muslim = len(st.session_state.all_muslim_names)
-        total_non_muslim = total_names - total_muslim
-        muslim_percentage = (total_muslim / total_names * 100) if total_names > 0 else 0
+        stats = st.session_state.stats
+        working_folder = st.session_state.working_folder
         
-        consolidated_stats = {
-            'total_names': total_names,
-            'total_muslim_names': total_muslim,
-            'non_muslim_names': total_non_muslim,
-            'muslim_percentage': muslim_percentage
-        }
-        
-        # Display consolidated results
-        st.subheader("📊 Consolidated Results (All Processed Files)")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Files Processed", len(st.session_state.processed_files))
-        with col2:
-            st.metric("Total Names", consolidated_stats['total_names'])
-        with col3:
-            st.metric("Total Muslim Names", consolidated_stats['total_muslim_names'])
-        with col4:
-            st.metric("Muslim Percentage", f"{consolidated_stats['muslim_percentage']:.1f}%")
-        
-        # Visualizations
-        st.markdown("---")
-        
-        # Row 1: Charts
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📊 Overall Analysis")
-            comparison_fig = create_comparison_chart(consolidated_stats)
-            st.plotly_chart(comparison_fig, use_container_width=True)
-        
-        with col2:
-            st.subheader("🥧 Distribution")
-            pie_fig = create_pie_chart(consolidated_stats)
-            st.plotly_chart(pie_fig, use_container_width=True)
-        
-        # Row 2: Gauge and file breakdown
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📊 Muslim Percentage")
-            gauge_fig = create_percentage_gauge(consolidated_stats)
-            st.plotly_chart(gauge_fig, use_container_width=True)
-        
-        with col2:
-            st.subheader("📋 File Breakdown")
-            breakdown_data = []
-            for file_hash, record in st.session_state.processed_files.items():
-                breakdown_data.append({
-                    'File': record['filename'][:30] + '...' if len(record['filename']) > 30 else record['filename'],
-                    'Names': record['total_names'],
-                    'Muslim': record['muslim_count'],
-                    'Muslim %': f"{(record['muslim_count'] / record['total_names'] * 100):.1f}%" if record['total_names'] > 0 else "0%"
-                })
+        # Load consolidated data for complete analysis
+        try:
+            consolidated_extracted_path = os.path.join(working_folder, "consolidated_extracted_names.csv")
+            consolidated_muslim_path = os.path.join(working_folder, "consolidated_muslim_names.csv")
             
-            breakdown_df = pd.DataFrame(breakdown_data)
-            st.dataframe(breakdown_df, use_container_width=True)
-    
-    with tab4:
-            st.header("📥 Download Center")
-            
-            if 'processed_files' not in st.session_state or len(st.session_state.processed_files) == 0:
-                st.warning("⚠️ No data available for download. Please process and analyze PDF files first.")
-                return
-            
-            st.subheader("📊 Available Downloads")
-            
-            # Create download columns
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("### 📁 Individual File Downloads")
+            if os.path.exists(consolidated_extracted_path) and os.path.exists(consolidated_muslim_path):
+                consolidated_extracted_df = pd.read_csv(consolidated_extracted_path)
+                consolidated_muslim_df = pd.read_csv(consolidated_muslim_path)
                 
-                # Individual file downloads
-                for file_hash, record in st.session_state.processed_files.items():
-                    with st.expander(f"📄 {record['filename']}"):
-                        st.write(f"**Processed:** {record['timestamp']}")
-                        st.write(f"**Total Names:** {record['total_names']}")
-                        st.write(f"**Muslim Names:** {record['muslim_count']}")
-                        
-                        # Download buttons for individual files
-                        col_a, col_b = st.columns(2)
-                        
-                        with col_a:
-                            # All extracted names CSV
-                            extracted_df = pd.DataFrame(record['extracted_data'])
-                            extracted_csv = extracted_df.to_csv(index=False)
-                            
-                            st.download_button(
-                                label="📄 All Names CSV",
-                                data=extracted_csv,
-                                file_name=f"extracted_names_{record['filename'].replace('.pdf', '')}.csv",
-                                mime="text/csv",
-                                help="Download all extracted names from this file"
-                            )
-                        
-                        with col_b:
-                            # Muslim names only CSV
-                            muslim_df = pd.DataFrame({'Name': record['muslim_names']})
-                            muslim_csv = muslim_df.to_csv(index=False)
-                            
-                            st.download_button(
-                                label="🕌 Muslim Names CSV",
-                                data=muslim_csv,
-                                file_name=f"muslim_names_{record['filename'].replace('.pdf', '')}.csv",
-                                mime="text/csv",
-                                help="Download only Muslim names from this file"
-                            )
-            
-            with col2:
-                st.markdown("### 📊 Consolidated Downloads")
+                # Calculate consolidated stats
+                total_consolidated_names = len(consolidated_extracted_df)
+                total_consolidated_muslim = len(consolidated_muslim_df)
+                total_consolidated_non_muslim = total_consolidated_names - total_consolidated_muslim
+                consolidated_muslim_percentage = (total_consolidated_muslim / total_consolidated_names) * 100 if total_consolidated_names > 0 else 0
                 
-                # Create consolidated data
-                all_extracted_df, all_muslim_df = create_downloadable_files()
+                consolidated_stats = {
+                    'total_names': total_consolidated_names,
+                    'total_muslim_names': total_consolidated_muslim,
+                    'non_muslim_names': total_consolidated_non_muslim,
+                    'muslim_percentage': consolidated_muslim_percentage
+                }
                 
-                # Summary report
-                summary_data = create_summary_report()
+                # Display consolidated results
+                st.subheader("📊 Consolidated Results (All Processed Files)")
                 
-                # Download buttons for consolidated data
-                st.markdown("#### 📋 All Files Combined")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Files Processed", len(consolidated_extracted_df['file_number'].unique()))
+                with col2:
+                    st.metric("Total Names", consolidated_stats['total_names'])
+                with col3:
+                    st.metric("Total Muslim Names", consolidated_stats['total_muslim_names'])
+                with col4:
+                    st.metric("Muslim Percentage", f"{consolidated_stats['muslim_percentage']:.1f}%")
                 
-                # Consolidated all names
-                if not all_extracted_df.empty:
-                    consolidated_csv = all_extracted_df.to_csv(index=False)
-                    st.download_button(
-                        label="📊 All Names (Consolidated)",
-                        data=consolidated_csv,
-                        file_name=f"TMMK_consolidated_all_names_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        help="Download all names from all processed files",
-                        type="primary"
-                    )
+                # Visualizations
+                st.markdown("---")
                 
-                # Consolidated Muslim names
-                if not all_muslim_df.empty:
-                    consolidated_muslim_csv = all_muslim_df.to_csv(index=False)
-                    st.download_button(
-                        label="🕌 Muslim Names (Consolidated)",
-                        data=consolidated_muslim_csv,
-                        file_name=f"TMMK_consolidated_muslim_names_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        help="Download all Muslim names from all processed files",
-                        type="primary"
-                    )
+                # Row 1: Current file vs Consolidated comparison
+                col1, col2 = st.columns(2)
                 
-                # Summary report
-                if not summary_data.empty:
-                    summary_csv = summary_data.to_csv(index=False)
-                    st.download_button(
-                        label="📈 Analysis Summary",
-                        data=summary_csv,
-                        file_name=f"TMMK_analysis_summary_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        help="Download summary report of all processed files"
-                    )
-            
-            st.markdown("---")
-            
-            # ZIP download section
-            st.subheader("📦 Complete Package Download")
-            st.info("💡 **Recommended:** Download everything as a ZIP file for easy organization")
-            
-            col1, col2, col3 = st.columns([1, 2, 1])
-            
-            with col2:
-                if st.button("📦 Create & Download Complete Package", type="primary", use_container_width=True):
-                    with st.spinner("📦 Creating ZIP package..."):
-                        zip_data = create_zip_download()
-                        
-                        if zip_data:
-                            st.success("✅ ZIP package created successfully!")
-                            
-                            # Create download button for ZIP
-                            st.download_button(
-                                label="⬇️ Download ZIP Package",
-                                data=zip_data,
-                                file_name=f"TMMK_Analysis_Package_{time.strftime('%Y%m%d_%H%M%S')}.zip",
-                                mime="application/zip",
-                                help="Download all files and reports in a single ZIP package",
-                                type="primary",
-                                use_container_width=True
-                            )
-                            
-                            # Show ZIP contents
-                            st.markdown("### 📋 ZIP Package Contents:")
-                            zip_contents = [
-                                "📄 Individual extracted names (CSV for each file)",
-                                "🕌 Individual Muslim names (CSV for each file)", 
-                                "📊 Consolidated all names (CSV)",
-                                "📊 Consolidated Muslim names (CSV)",
-                                "📈 Analysis summary report (CSV)",
-                                "📝 Processing log (JSON)"
-                            ]
-                            
-                            for content in zip_contents:
-                                st.write(f"• {content}")
-                        else:
-                            st.error("❌ Error creating ZIP package. Please try again.")
-            
-            st.markdown("---")
-            
-            # Session management
-            st.subheader("🔄 Session Management")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric("Current Session", st.session_state.session_id)
-            
-            with col2:
-                st.metric("Files in Session", len(st.session_state.processed_files))
-            
-            with col3:
-                st.metric("Total Names", len(st.session_state.all_extracted_data))
-            
-            # Clear session button
-            st.markdown("#### ⚠️ Session Actions")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("🔄 Reset Session", help="Clear all processed data and start fresh"):
-                    # Clear all session data
-                    keys_to_clear = [
-                        'processed_files', 'all_extracted_data', 'all_muslim_names',
-                        'session_folder', 'session_id', 'current_extracted_data',
-                        'current_file_hash', 'current_filename', 'current_df'
+                with col1:
+                    st.subheader("📊 Current File Analysis")
+                    current_comparison_fig = create_comparison_chart(stats)
+                    st.plotly_chart(current_comparison_fig, use_container_width=True, key="current_comparison")
+                
+                with col2:
+                    st.subheader("📊 Consolidated Analysis")
+                    consolidated_comparison_fig = create_comparison_chart(consolidated_stats)
+                    st.plotly_chart(consolidated_comparison_fig, use_container_width=True, key="consolidated_comparison")
+                
+                # Row 2: Pie charts
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("🥧 Current File Distribution")
+                    current_pie_fig = create_pie_chart(stats)
+                    st.plotly_chart(current_pie_fig, use_container_width=True, key="current_pie")
+                
+                with col2:
+                    st.subheader("🥧 Consolidated Distribution")
+                    consolidated_pie_fig = create_pie_chart(consolidated_stats)
+                    st.plotly_chart(consolidated_pie_fig, use_container_width=True, key="consolidated_pie")
+                
+                # Row 3: Percentage gauges
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("📊 Current File Muslim %")
+                    current_gauge_fig = create_percentage_gauge(stats)
+                    st.plotly_chart(current_gauge_fig, use_container_width=True, key="current_gauge")
+                
+                with col2:
+                    st.subheader("📊 Consolidated Muslim %")
+                    consolidated_gauge_fig = create_percentage_gauge(consolidated_stats)
+                    st.plotly_chart(consolidated_gauge_fig, use_container_width=True, key="consolidated_gauge")
+                
+                # Summary table
+                st.subheader("📋 Summary Report")
+                summary_data = {
+                    'Metric': [
+                        'Total Files Processed',
+                        'Current File - Total Names',
+                        'Current File - Muslim Names',
+                        'Current File - Muslim %',
+                        'Consolidated - Total Names',
+                        'Consolidated - Muslim Names', 
+                        'Consolidated - Muslim %'
+                    ],
+                    'Value': [
+                        len(consolidated_extracted_df['file_number'].unique()),
+                        stats['total_names'],
+                        stats['total_muslim_names'],
+                        f"{stats['muslim_percentage']:.2f}%",
+                        consolidated_stats['total_names'],
+                        consolidated_stats['total_muslim_names'],
+                        f"{consolidated_stats['muslim_percentage']:.2f}%"
                     ]
-                    
-                    for key in keys_to_clear:
-                        if key in st.session_state:
-                            del st.session_state[key]
-                    
-                    st.success("✅ Session reset successfully!")
-                    st.experimental_rerun()
-            
-            with col2:
-                # Show session info
-                if st.button("ℹ️ Session Info", help="Show detailed session information"):
-                    st.json({
-                        'session_id': st.session_state.session_id,
-                        'files_processed': len(st.session_state.processed_files),
-                        'total_names_extracted': len(st.session_state.all_extracted_data),
-                        'total_muslim_names': len(st.session_state.all_muslim_names),
-                        'files_list': [record['filename'] for record in st.session_state.processed_files.values()]
-                    })
-            
-            # Instructions for users
-            st.markdown("---")
-            st.subheader("📋 Download Instructions")
-            
-            with st.expander("🔍 How to organize downloaded files"):
-                st.markdown("""
-                ### 📁 Recommended File Organization
+                }
+                summary_df = pd.DataFrame(summary_data)
+                st.dataframe(summary_df, use_container_width=True)
                 
-                **After downloading, organize your files like this:**
+                # Download consolidated data
+                st.subheader("📥 Download Options")
+                col1, col2, col3 = st.columns(3)
                 
-                ```
-                📁 TMMK_Analysis_[Date]/
-                ├── 📁 Individual_Files/
-                │   ├── extracted_names_file1.csv
-                │   ├── muslim_names_file1.csv
-                │   ├── extracted_names_file2.csv
-                │   └── muslim_names_file2.csv
-                ├── 📁 Consolidated_Results/
-                │   ├── TMMK_consolidated_all_names.csv
-                │   ├── TMMK_consolidated_muslim_names.csv
-                │   └── TMMK_analysis_summary.csv
-                └── 📄 processing_log.json
-                ```
+                with col1:
+                    extracted_csv = consolidated_extracted_df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download All Extracted Names",
+                        extracted_csv,
+                        file_name="all_extracted_names.csv",
+                        mime="text/csv"
+                    )
                 
-                ### 💡 Tips:
-                - **Use the ZIP download** for automatic organization
-                - **Individual CSV files** are good for specific file analysis
-                - **Consolidated files** are perfect for overall statistics
-                - **Summary report** gives you quick insights
-                - **Processing log** contains technical details
+                with col2:
+                    muslim_csv = consolidated_muslim_df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download All Muslim Names",
+                        muslim_csv,
+                        file_name="all_muslim_names.csv",
+                        mime="text/csv"
+                    )
                 
-                ### 🔄 Browser Downloads:
-                - Files will appear in your browser's default download folder
-                - You can change download location in browser settings
-                - ZIP files will automatically extract when opened
-                """)
+                with col3:
+                    summary_csv = summary_df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download Summary Report",
+                        summary_csv,
+                        file_name="analysis_summary.csv",
+                        mime="text/csv"
+                    )
             
-            # Additional features
-            st.markdown("---")
-            st.subheader("🛠️ Additional Features")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### 📊 Data Export Options")
-                st.write("• CSV format for Excel compatibility")
-                st.write("• JSON format for technical analysis") 
-                st.write("• ZIP packaging for easy sharing")
-                st.write("• Individual and consolidated reports")
-            
-            with col2:
-                st.markdown("#### 🔍 Analysis Features")
-                st.write("• Muslim name identification using AI")
-                st.write("• Statistical analysis and percentages")
-                st.write("• Visual charts and graphs")
-                st.write("• Batch processing support")
+            else:
+                st.warning("⚠️ Consolidated files not found. Please complete the analysis process first.")
+        
+        except Exception as e:
+            st.error(f"❌ Error loading consolidated data: {e}")
     
-    # Add this helper function if not already present
-    def get_download_filename(base_name, extension="csv"):
-        """Generate a standardized download filename with timestamp"""
-        timestamp = time.strftime('%Y%m%d_%H%M%S')
-        return f"TMMK_{base_name}_{timestamp}.{extension}"
-    
+    # Footer
+    st.markdown("---")
+    st.markdown(
+        "🔧 **Made with Streamlit** | "
+        "💡 **Powered by Google Gemini AI** | "
+        "📄 **PDF Processing with PyMuPDF**"
+    )
+
 if __name__ == "__main__":
     main()
