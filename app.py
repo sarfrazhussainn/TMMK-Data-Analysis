@@ -443,7 +443,7 @@ def create_percentage_gauge(stats):
 
 # ---- Main Streamlit App ----
 def main():
-    st.title("🔍 PDF Name & Guardian Extractor with Muslim Name Analysis")
+    st.title("TMMK Data Analysis")
     st.markdown("---")
     
     # Sidebar for configuration
