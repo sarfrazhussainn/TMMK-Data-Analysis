@@ -679,12 +679,12 @@ def main():
                 with col1:
                     st.subheader("📊 Current File Analysis")
                     current_comparison_fig = create_comparison_chart(stats)
-                    st.plotly_chart(current_comparison_fig, use_container_width=True)
+                    st.plotly_chart(current_comparison_fig, use_container_width=True, key="current_comparison")
                 
                 with col2:
                     st.subheader("📊 Consolidated Analysis")
                     consolidated_comparison_fig = create_comparison_chart(consolidated_stats)
-                    st.plotly_chart(consolidated_comparison_fig, use_container_width=True)
+                    st.plotly_chart(consolidated_comparison_fig, use_container_width=True, key="consolidated_comparison")
                 
                 # Row 2: Pie charts
                 col1, col2 = st.columns(2)
@@ -692,12 +692,12 @@ def main():
                 with col1:
                     st.subheader("🥧 Current File Distribution")
                     current_pie_fig = create_pie_chart(stats)
-                    st.plotly_chart(current_pie_fig, use_container_width=True)
+                    st.plotly_chart(current_pie_fig, use_container_width=True, key="current_pie")
                 
                 with col2:
                     st.subheader("🥧 Consolidated Distribution")
                     consolidated_pie_fig = create_pie_chart(consolidated_stats)
-                    st.plotly_chart(consolidated_pie_fig, use_container_width=True)
+                    st.plotly_chart(consolidated_pie_fig, use_container_width=True, key="consolidated_pie")
                 
                 # Row 3: Percentage gauges
                 col1, col2 = st.columns(2)
@@ -705,12 +705,12 @@ def main():
                 with col1:
                     st.subheader("📊 Current File Muslim %")
                     current_gauge_fig = create_percentage_gauge(stats)
-                    st.plotly_chart(current_gauge_fig, use_container_width=True)
+                    st.plotly_chart(current_gauge_fig, use_container_width=True, key="current_gauge")
                 
                 with col2:
                     st.subheader("📊 Consolidated Muslim %")
                     consolidated_gauge_fig = create_percentage_gauge(consolidated_stats)
-                    st.plotly_chart(consolidated_gauge_fig, use_container_width=True)
+                    st.plotly_chart(consolidated_gauge_fig, use_container_width=True, key="consolidated_gauge")
                 
                 # Summary table
                 st.subheader("📋 Summary Report")
