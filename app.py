@@ -6,7 +6,7 @@ import tempfile
 import os
 import pandas as pd
 import time
-from google import genai
+import google.generativeai as genai
 from google.genai import types
 import json
 from collections import Counter
@@ -285,7 +285,7 @@ def process_pdf(file_path, top_margin, bottom_margin):
     return data
 
 # ---- Helper Functions for Muslim Name Analysis ----
-def extract_muslim_names(names, client):
+def extract_muslim_names(names):
     """Extract Muslim names from a list of names using Gemini API"""
     prompt = (
         """Here is a list of names:
@@ -295,10 +295,8 @@ Analyze each name and identify which ones are Muslim names. Consider variations 
     )
     
     try:
-        resp = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=prompt
-        )
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        resp = model.generate_content(prompt)
         text = resp.text.strip()
         
         # Clean the response text
@@ -336,7 +334,7 @@ def analyze_names_statistics(all_names, muslim_names):
         'muslim_percentage': muslim_percentage
     }
 
-def process_names_for_analysis(names, client, batch_size=500, pause=1.0):
+def process_names_for_analysis(names, batch_size=500, pause=1.0):
     """Process names in batches for Muslim name analysis"""
     total_muslim_names = []
     batch_count = 0
@@ -349,7 +347,7 @@ def process_names_for_analysis(names, client, batch_size=500, pause=1.0):
         
         status_text.text(f"Processing batch {batch_count}/{(len(names)-1)//batch_size + 1}...")
         
-        muslim_names_batch = extract_muslim_names(batch, client)
+        muslim_names_batch = extract_muslim_names(batch)
         total_muslim_names.extend(muslim_names_batch)
         
         progress = (i + batch_size) / len(names)
@@ -561,15 +559,13 @@ def main():
         
         # Initialize Gemini client
         try:
-            client = genai.Client(api_key=api_key)
-            # Test the client with a simple request
-            test_response = client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents="Test message"
-            )
+            genai.configure(api_key=api_key)
+            # Test the API with a simple request
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            test_response = model.generate_content("Test message")
             st.success("✅ Gemini API connection successful!")
         except Exception as e:
-            st.error(f"❌ Error initializing Gemini client: {e}")
+            st.error(f"❌ Error initializing Gemini API: {e}")
             return
         
         df = st.session_state.df
@@ -592,7 +588,7 @@ def main():
             
             with st.spinner("Analyzing names with Gemini AI..."):
                 try:
-                    muslim_names = process_names_for_analysis(names, client, batch_size, pause_time)
+                    muslim_names = process_names_for_analysis(names, batch_size, pause_time)
                     
                     # Save all files
                     saved_files = save_analysis_files(working_folder, extracted_data, muslim_names, file_hash)
