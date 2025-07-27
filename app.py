@@ -7,7 +7,6 @@ import os
 import pandas as pd
 import time
 import google.generativeai as genai
-from google.genai import types
 import json
 from collections import Counter
 import matplotlib.pyplot as plt
