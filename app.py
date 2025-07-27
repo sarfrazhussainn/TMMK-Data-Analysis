@@ -450,7 +450,7 @@ def main():
     st.sidebar.header("⚙️ Configuration")
     
     # API Key input
-    api_key = st.sidebar.text_input("Google Gemini API Key", type="password", 
+    api_key = st.sidebar.text_input("Enter API Key", type="password", 
                                    help="Enter your Google Gemini API key for Muslim name analysis")
     
     # PDF processing parameters
